@@ -2,72 +2,125 @@
 #-*- coding: utf-8 -*-
 import re
 import os
-from mysql.connector import MySQLConnection, Error
+import configparser
+import pymysql.cursors
+
+#собираем данные для работы из script.conf файла
+conf = configparser.RawConfigParser()
+conf.read('script.conf')
+host = conf.get('db_autch', 'host')
+user = conf.get('db_autch', 'user')
+password = conf.get('db_autch', 'password')
+db_name = conf.get('db_autch', 'db_name')
 regex = r"from [0.*-9]* to [0-9].*"
 
-# Обновление данных в таблице
-def update_cdr(path, recordingfile):
-    # read database configuration
-    db_config = {'password': 'Paralaxx', 'host': 'localhost', 'user': 'root', 'database': 'asteriskcdrdb'}
-    # prepare query and data
-    query = """UPDATE cdr SET path=%s WHERE recordingfile =%s """
-    data = (path, recordingfile)
-
+def update_cdr(connection, path, recordingfile):
+    #
+    # # Connect to the database
+    # connection = pymysql.connect(host= host,
+    #                              user=user,
+    #                              password= password,
+    #                              db=db_name,
+    #                              charset='utf8mb4',
+    #                              cursorclass=pymysql.cursors.DictCursor)
     try:
-        conn = MySQLConnection(**db_config)
-
-        # update book title
-        cursor = conn.cursor()
-        cursor.execute(query, data)
-       # print (query)
-        # accept the changes
-        conn.commit()
-
-    except Error as error:
-        print(error)
-
+        with connection.cursor() as cursor:
+            sql = '''UPDATE cdr SET path=%s WHERE recordingfile =%s'''
+            cursor.execute(sql, (path, recordingfile))
     finally:
-	cursor.close()
-        conn.close()
+        connection.close()
+
+    # запись расшифровки в БД
+    # Обновление данных в таблице
+def update_translite(connection, trans, recordingfile):
+    # connection = pymysql.connect(host= host,
+    #                              user=user,
+    #                              password= password,
+    #                              db=db_name,
+    #                              charset='utf8mb4',
+    #                              cursorclass=pymysql.cursors.DictCursor)
+    #                            cursorclass=pymysql.cursors.DictCursor)
+    try:
+        with connection.cursor() as cursor:
+            sql = '''UPDATE cdr SET translation=%s WHERE recordingfile =%s '''
+            cursor.execute(sql, (trans, recordingfile))
+    finally:
+        connection.close()
+
 #рашифровка записи
 def translite(path):
     tpath = path[0:-3]+"txt"
     #print tpath
     os.system('asrclient-cli.py --silent ' + path + ' > ' + tpath)
-    result2 = re.sub("^\n", "", (re.sub(regex, "", open(tpath).read(), 0)), 0)
-    os.remove(tpath)
+    # result2 = re.sub("^\n", "", (re.sub(regex, "", open(tpath).read(), 0)), 0)
+    # os.remove(tpath)
     return result2
-#Запрос на выборку
-def query_with_fetchall():
-    try:
-        db_config = {'password': 'Paralaxx', 'host': 'localhost', 'user': 'root'                                                                 $
-	conn = MySQLConnection(**db_config)
-        cursor = conn.cursor()
-        #cursor.execute("SELECT recordingfile, calldate FROM cdr ")
-        cursor.execute("SELECT recordingfile, calldate, translation FROM cdr where  billsec > 0 and recordingfile <> ''")
-        #rows = cursor.fetchall()
-        for recordingfile, calldate, translation in cursor:
-            path = (pathwavfunct(recordingfile, calldate))
-            #if (not (translation == "")): пройтись по всем записям
-            if (translation == ""): # пройтись только по не распозанным записям
-                update_cdr(str(path), str(recordingfile))
-                #print(translite(path))
-                trans = translite(path)
-                update_translite(str(trans), str(recordingfile))
-    except Error as e:
-        print(e)
 
+
+#запрос на выборку
+def query_fetchall(connection):
+    # # Connect to the database
+    # connection = pymysql.connect(host= host,
+    #                              user=user,
+    #                              password= password,
+    #                              db=db_name,
+    #                              charset='utf8mb4',
+    #                              cursorclass=pymysql.cursors.DictCursor)
+    try:
+        with connection.cursor() as cursor:
+            sql = "SELECT recordingfile, calldate, translation FROM cdr where  billsec > 0 and recordingfile <> ''"
+            cursor.execute(sql)
+            for recordingfile, calldate, translation in cursor:
+                path = (pathwavfunct(recordingfile, calldate))
+                # if (not (translation == "")): пройтись по всем записям
+                if (translation == ""):  # пройтись только по не распозанным записям
+                    update_cdr(str(path), str(recordingfile))
+                    # print(translite(path))
+                    trans = translite(path)
+                    update_translite(str(trans), str(recordingfile))
     finally:
-	cursor.close()
-        conn.close()
+        connection.close()
 
 # полный путь к wav файлу
 def pathwavfunct(recordingfile, calldate ):
-    return "/var/spool/asterisk/monitor/"+re.sub("-", "/", str (calldate)[0:10],                                                                 $
+    return "/var/spool/asterisk/monitor/" + re.sub("-", "/", str(calldate)[0:10], 0) + "/" + recordingfile
+
+def tester(connection):
+    try:
+        with connection.cursor() as cursor:
+            sql = "SELECT recordingfile, calldate FROM cdr where  billsec > 0 and recordingfile <> '' and translation = ''"
+            cursor.execute(sql)
+            result = cursor.fetchall()
+            for row in result:
+                print(row['calldate'])
+                print(row['recordingfile'])
+                # recordingfile = row[0]
+                # calldate = row[1]
+                path = (pathwavfunct(row['recordingfile'], row['calldate']))
+                # if (not (translation == "")): пройтись по всем записям
+                trans = translite(path)
+                # print(trans)
+                # print(path)
+                # # print(result)
+                # print(recordingfile)
+                # update_translite(str(trans), str(recordingfile))
+    finally:
+        connection.close()
+
+def main():
+    connection = pymysql.connect(host= host,
+                                 user=user,
+                                 password= password,
+                                 db=db_name,
+                                 charset='utf8mb4',
+                                 cursorclass=pymysql.cursors.DictCursor)
+    tester(connection)
 
 
 
-regex = r"from [0.*-9]* to [0-9].*"
-query_with_fetchall()
 
+if __name__ == '__main__':
+    main()
+
+    # query_fetchall(connection)
 
